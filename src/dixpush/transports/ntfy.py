@@ -1,11 +1,11 @@
 # src/dixpush/transports/ntfy.py
-# dv_file_version = '261031.02'
+# dv_file_version = '261031.03'
 
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
-from email.header import Header
 from typing import TYPE_CHECKING
 
 import httpx
@@ -34,7 +34,7 @@ _PRIORITY_VALUE: dict[str, int] = {
 
 
 def _encode_title(title: str) -> str:
-    """Кодировать Title в RFC 2047, если он не ASCII.
+    """Кодировать Title в RFC 2047 (одной строкой), если он не ASCII.
 
     ntfy декодирует encoded-word обратно в читаемый текст (эмодзи, кириллица).
     Для чистого ASCII возвращаем строку как есть.
@@ -43,8 +43,9 @@ def _encode_title(title: str) -> str:
         title.encode("ascii")
         return title
     except UnicodeEncodeError:
-        # RFC 2047: =?utf-8?b?...?=
-        return Header(title, "utf-8").encode()
+        # RFC 2047: =?utf-8?b?<base64>?= (без переносов строк)
+        b64 = base64.b64encode(title.encode("utf-8")).decode("ascii")
+        return f"=?utf-8?b?{b64}?="
 
 
 class NtfyTransport(Transport):

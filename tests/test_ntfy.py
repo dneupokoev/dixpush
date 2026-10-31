@@ -1,11 +1,11 @@
 # tests/test_ntfy.py
-# dv_file_version = '261031.02'
+# dv_file_version = '261031.03'
 
 from __future__ import annotations
 
 import httpx
 import pytest
-from email.header import Header, decode_header
+from email.header import decode_header
 
 from dixpush import Priority
 from dixpush.transports.ntfy import NtfyTransport, _encode_title
@@ -163,12 +163,29 @@ def test_encode_title_cyrillic_rfc2047() -> None:
     assert decoded == src
 
 
-def test_encode_title_emoji_rfc2047() -> None:
-    """Эмодзи + кириллица → RFC 2047, декодируется обратно."""
-    src = "❌ ERROR | prod.itzamna.ERROR_load_patient_data"
+def test_encode_title_emoji_no_newlines() -> None:
+    """Эмодзи (вызывавшие падение) → RFC 2047, без переносов строк."""
+    src = "✅ 🔥 🚀 ⚠️ itzamna: стартовала (261031.01)"
     encoded = _encode_title(src)
     assert encoded != src
     assert encoded.isascii()
+    assert "\n" not in encoded  # НИКАКИХ переносов!
+    
+    decoded_parts = decode_header(encoded)
+    decoded = "".join(
+        part.decode(charset or "utf-8") if isinstance(part, bytes) else part
+        for part, charset in decoded_parts
+    )
+    assert decoded == src
+
+
+def test_encode_title_long_emoji_no_newlines() -> None:
+    """Очень длинный заголовок → одна строка, без переносов."""
+    src = "🔥" * 50 + " Очень длинный заголовок " + "🚀" * 50
+    encoded = _encode_title(src)
+    assert encoded.isascii()
+    assert "\n" not in encoded  # НИКАКИХ переносов!
+    
     decoded_parts = decode_header(encoded)
     decoded = "".join(
         part.decode(charset or "utf-8") if isinstance(part, bytes) else part
@@ -192,8 +209,9 @@ async def test_send_cyrillic_title_does_not_raise() -> None:
 
     assert ok is True
     assert captured["title"] is not None
-    assert captured["title"].isascii()  # на провод уходит ASCII
-    # декодируем — исходный текст
+    assert captured["title"].isascii()
+    assert "\n" not in captured["title"]
+    
     parts = decode_header(captured["title"])
     decoded = "".join(
         p.decode(cs or "utf-8") if isinstance(p, bytes) else p
@@ -212,12 +230,14 @@ async def test_send_emoji_title_does_not_raise() -> None:
         return httpx.Response(200)
 
     t = make_transport(handler)
-    title = "❌ ERROR | prod.itzamna.ERROR_load_patient_data"
+    title = "✅ 🔥 🚀 ⚠️ itzamna: стартовала (261031.01)"
     ok = await t.send("error", title, "Body", "k", None)
     await t.close()
 
     assert ok is True
     assert captured["title"].isascii()
+    assert "\n" not in captured["title"]
+    
     parts = decode_header(captured["title"])
     decoded = "".join(
         p.decode(cs or "utf-8") if isinstance(p, bytes) else p
