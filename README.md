@@ -1,5 +1,5 @@
 <!-- README.md -->
-<!-- dv_file_version = '261031.01' -->
+<!-- dv_file_version = '261031.02' -->
 
 # dixpush
 
@@ -16,10 +16,10 @@ pip install git+https://github.com/dneupokoev/dixpush.git
 Или зафиксируйте версию (рекомендуется для production):
 
 ```bash
-pip install git+https://github.com/dneupokoev/dixpush.git@v0.1.0
+pip install git+https://github.com/dneupokoev/dixpush.git@v0.2.0
 ```
 
-## Быстрый старт
+## Быстрый старт (async)
 
 ```python
 import asyncio
@@ -68,6 +68,79 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
+## Быстрый старт (sync)
+
+Если код синхронный, используйте `*_sync`-методы. Внутри библиотека лениво поднимает фоновый event loop, задачи уходят туда, `httpx.AsyncClient` живёт в нём же. Ничего дополнительно настраивать не нужно.
+
+```python
+from dixpush import DixPush
+from dixpush.transports.ntfy import NtfyTransport
+
+push = DixPush(
+    transport=NtfyTransport(
+        server="https://ntfy.sh",
+        topics={
+            "error": "error-xxxx",
+            "warning": "warning-xxxx",
+            "info": "info-xxxx",
+        },
+    ),
+)
+
+push.error("Telegram API", "Connection timeout", key="tg_api")   # error_sync
+push.warning("Redis", "Connection refused", key="redis")         # warning_sync
+push.info("Daily stats", "147 запросов, 3 ошибки")               # info_sync
+
+push.close_sync()  # остановить фоновый loop и закрыть httpx
+```
+
+### Что выбрать: async или sync
+
+- **Async-код** (FastAPI, aiogram, воркеры) — обычные `await push.error(...)`, `await push.warning(...)`, `await push.info(...)`. Основной путь.
+- **Sync-код** (Celery-таски, cron, скрипты, `def`-функции) — `push.error_sync(...)` и т.д. Не блокируют вызывающий поток, задача выполняется в фоновом loop.
+- **Смешивать async- и sync-методы на одном экземпляре `DixPush` можно**, но есть нюанс: `httpx.AsyncClient` создаётся в том loop'е, где произошёл первый вызов. Если первый вызов — async (в основном loop), а потом вы зовёте `error_sync` из синхронного кода — задача уйдёт в фоновый loop, а клиент останется в основном. Это может привести к `RuntimeError` при реальном `NtfyTransport`. Для такого сценария используйте **два экземпляра** `DixPush` (один для async, один для sync) или держите все вызовы в одном стиле. `Guards` (антиспам) при этом будут раздельными — если нужен общий антиспам между async- и sync-вызовами, это отдельная задача.
+
+## Синглтон в проекте
+
+Один `DixPush` на процесс — иначе дедупликация, cooldown и rate limit не работают (у каждого экземпляра свои `Guards`). Удобно завести функцию в `settings.py`:
+
+```python
+# settings.py
+import os
+import dixpush as _dixpush_mod
+from dixpush.transports.ntfy import NtfyTransport
+
+_push: _dixpush_mod.DixPush | None = None
+
+
+def dix_push() -> _dixpush_mod.DixPush:
+    global _push
+    if _push is None:
+        _push = _dixpush_mod.DixPush(
+            transport=NtfyTransport(
+                server=os.getenv("DIXPUSH_NTFY_SERVER", "https://ntfy.sh"),
+                topics={
+                    "error":   os.getenv("DIXPUSH_NTFY_TOPIC_ERROR", ""),
+                    "warning": os.getenv("DIXPUSH_NTFY_TOPIC_WARNING", ""),
+                    "info":    os.getenv("DIXPUSH_NTFY_TOPIC_INFO", ""),
+                },
+                token=os.getenv("DIXPUSH_NTFY_TOKEN") or None,
+            ),
+            enabled=os.getenv("DIXPUSH_ENABLED", "true").lower() in ("1", "true", "yes", "on"),
+        )
+    return _push
+```
+
+Использование:
+
+```python
+# синхронно
+settings.dix_push().error_sync("Telegram API", "Connection timeout", key="tg_api")
+
+# асинхронно
+await settings.dix_push().error("Telegram API", "Connection timeout", key="tg_api")
+```
+
 ## Использование из env
 
 ```python
@@ -100,6 +173,7 @@ DIXPUSH_TIMEOUT_SEC=5
 - **Сообщение = subj + body.** Заголовок отправляется через HTTP-заголовок `Title:` (в клиенте ntfy отображается жирным), тело — как основное содержимое.
 - **Graceful degradation.** При недоступности ntfy логируется warning, код не падает. Ограниченный retry (1 раз), без буферизации в память.
 - **Расширяемость.** Транспорт реализует ABC `Transport`, добавление email/webhook не требует изменения `push.py`.
+- **Async и sync.** `await push.error(...)` для async-кода, `push.error_sync(...)` для синхронного. Синхронный путь не требует `asyncio.run` в проекте.
 
 ## Уровни и приоритеты
 

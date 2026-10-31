@@ -1,12 +1,13 @@
 # src/dixpush/push.py
-# dv_file_version = '261031.01'
+# dv_file_version = '261031.02'
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 from enum import Enum
-from typing import Any
+from typing import Any, Coroutine
 
 from dixpush.config import DixPushConfig
 from dixpush.guards import Guards
@@ -28,7 +29,13 @@ class Priority(Enum):
 
 
 class DixPush:
-    """Асинхронная библиотека push-уведомлений с антиспамом."""
+    """Асинхронная библиотека push-уведомлений с антиспамом.
+
+    Async-методы (error/warning/info/close) — основной путь для async-кода.
+    Sync-методы (error_sync/warning_sync/info_sync/close_sync) — для вызова
+    из синхронного кода: задача планируется в фоновом event loop, который
+    поднимается лениво при первом sync-вызове.
+    """
 
     def __init__(
         self,
@@ -49,6 +56,11 @@ class DixPush:
         )
         self._tasks: set[asyncio.Task[Any]] = set()
 
+        # Фоновый loop для sync-вызовов. Поднимается лениво.
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._loop_thread: threading.Thread | None = None
+        self._loop_lock = threading.Lock()
+
     @classmethod
     def from_env(cls) -> "DixPush":
         cfg = DixPushConfig.from_env()
@@ -66,6 +78,8 @@ class DixPush:
             rate_limit_burst=cfg.rate_limit_burst,
             enabled=cfg.enabled,
         )
+
+    # ------------------------------------------------------------------ async
 
     async def error(
         self,
@@ -96,6 +110,119 @@ class DixPush:
         priority: Priority | None = None,
     ) -> None:
         await self._dispatch("info", subj, body, key, priority)
+
+    async def close(self, timeout: float = 5.0) -> None:
+        if self._tasks:
+            await asyncio.wait(self._tasks, timeout=timeout)
+        closer = getattr(self._transport, "close", None)
+        if closer is not None:
+            result = closer()
+            if asyncio.iscoroutine(result):
+                await result
+        self._tasks.clear()
+
+    # ------------------------------------------------------------------- sync
+
+    def error_sync(
+        self,
+        subj: str,
+        body: str,
+        *,
+        key: str | None = None,
+        priority: Priority | None = None,
+    ) -> None:
+        """Синхронная версия error(): планирует задачу в фоновом loop."""
+        self._run_sync(self.error(subj, body, key=key, priority=priority))
+
+    def warning_sync(
+        self,
+        subj: str,
+        body: str,
+        *,
+        key: str | None = None,
+        priority: Priority | None = None,
+    ) -> None:
+        """Синхронная версия warning(): планирует задачу в фоновом loop."""
+        self._run_sync(self.warning(subj, body, key=key, priority=priority))
+
+    def info_sync(
+        self,
+        subj: str,
+        body: str,
+        *,
+        key: str | None = None,
+        priority: Priority | None = None,
+    ) -> None:
+        """Синхронная версия info(): планирует задачу в фоновом loop."""
+        self._run_sync(self.info(subj, body, key=key, priority=priority))
+
+    def close_sync(self, timeout: float = 5.0) -> None:
+        """Синхронная версия close(): дожидается закрытия и останавливает loop.
+
+        Если фоновый loop не поднимался (sync-методы не вызывались) —
+        просто закрывает транспорт в текущем контексте, если есть loop,
+        иначе — ничего не делает (нечего закрывать).
+        """
+        if self._loop is None:
+            # фоновый loop не поднимался — попробуем закрыть как есть
+            try:
+                running = asyncio.get_running_loop()
+            except RuntimeError:
+                running = None
+            if running is not None:
+                # мы внутри async-контекста — закрывать синхронно нельзя
+                logger.warning(
+                    "dixpush: close_sync() вызван из async-контекста без фонового loop"
+                )
+                return
+            # нечего закрывать: transport.close() — корутина, но loop'а нет
+            return
+
+        fut = asyncio.run_coroutine_threadsafe(self.close(timeout), self._loop)
+        try:
+            fut.result(timeout=timeout + 1.0)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("dixpush: close_sync ошибка (%s)", exc)
+        finally:
+            self._loop.call_soon_threadsafe(self._loop.stop)
+            if self._loop_thread is not None:
+                self._loop_thread.join(timeout=timeout + 1.0)
+            self._loop = None
+            self._loop_thread = None
+
+    # --------------------------------------------------------------- internals
+
+    def _ensure_loop(self) -> asyncio.AbstractEventLoop:
+        """Поднять фоновый loop в отдельном потоке (один раз на экземпляр)."""
+        if self._loop is not None:
+            return self._loop
+        with self._loop_lock:
+            if self._loop is not None:
+                return self._loop
+            loop = asyncio.new_event_loop()
+            thread = threading.Thread(
+                target=loop.run_forever,
+                name="dixpush-loop",
+                daemon=True,
+            )
+            thread.start()
+            self._loop = loop
+            self._loop_thread = thread
+            return loop
+
+    def _run_sync(self, coro: Coroutine[Any, Any, None]) -> None:
+        """Запланировать корутину в фоновом loop'е, не дожидаясь результата."""
+        try:
+            loop = self._ensure_loop()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("dixpush: не удалось поднять фоновый loop (%s)", exc)
+            coro.close()
+            return
+        try:
+            asyncio.run_coroutine_threadsafe(coro, loop)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("dixpush: не удалось запланировать задачу (%s)", exc)
+            coro.close()
 
     async def _dispatch(
         self,
@@ -132,13 +259,3 @@ class DixPush:
                 logger.warning("dixpush: отправка не удалась (level=%s)", level)
         except Exception as exc:  # noqa: BLE001 — не роняем вызывающий код
             logger.warning("dixpush: исключение при отправке (%s)", exc)
-
-    async def close(self, timeout: float = 5.0) -> None:
-        if self._tasks:
-            await asyncio.wait(self._tasks, timeout=timeout)
-        closer = getattr(self._transport, "close", None)
-        if closer is not None:
-            result = closer()
-            if asyncio.iscoroutine(result):
-                await result
-        self._tasks.clear()

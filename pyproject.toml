@@ -1,5 +1,5 @@
 # pyproject.toml
-# dv_file_version = '261031.01'
+# dv_file_version = '261031.02'
 
 [build-system]
 requires = ["hatchling"]
@@ -7,7 +7,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "dixpush"
-version = "0.1.0"
+version = "0.2.0"
 description = "Простая асинхронная библиотека push-уведомлений с антиспамом"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -23,4 +23,5 @@ packages = ["src/dixpush"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "strict"
+asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
