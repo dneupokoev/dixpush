@@ -1,0 +1,19 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "dixpush"
+version = "0.1.0"
+description = "Простая асинхронная библиотека push-уведомлений с антиспамом"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "dneupokoev" }]
+dependencies = ["httpx"]
+
+[project.urls]
+Homepage = "https://github.com/dneupokoev/dixpush"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dixpush"]
