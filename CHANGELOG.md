@@ -1,7 +1,25 @@
 <!-- CHANGELOG.md -->
-<!-- dv_file_version = '261031.02' -->
+<!-- dv_file_version = '261031.03' -->
 
 # Changelog
+
+## 2026-10-31
+
+### Добавлено
+- `tests/test_ntfy.py` — 5 тестов на RFC 2047: `_encode_title()` для ASCII/кириллицы/эмодзи, `send()` с кириллическим и эмодзи-заголовком (раньше падало с `UnicodeEncodeError`), декодирование `decode_header()` обратно в исходный текст.
+
+### Изменено
+- `src/dixpush/transports/ntfy.py` — `dv_file_version` → `'261031.02'`; добавлена `_encode_title()`: если `Title` не ASCII, кодируется по RFC 2047 (`email.header.Header`), ntfy декодирует обратно в читаемый текст (кириллица, эмодзи). Чистый ASCII передаётся как есть.
+- `tests/test_ntfy.py` — `dv_file_version` → `'261031.02'`.
+- `README.md` — `dv_file_version` → `'261031.03'`, версия в команде установки → `@v0.2.1`; в «Особенности» добавлен пункт про RFC 2047 для заголовков.
+- `AGENTS.md` — `dv_file_version` → `'261031.03'`; в раздел «Транспорт» добавлен пункт про RFC 2047 для `Title`.
+- `pyproject.toml` — `version = "0.2.1"`, `dv_file_version` → `'261031.03'`.
+
+### Исправлено
+- `src/dixpush/transports/ntfy.py` — `UnicodeEncodeError: 'ascii' codec can't encode characters` при отправке заголовка с кириллицей/эмодзи (например, `❌ ERROR | prod.itzamna.ERROR_load_patient_data`). Уведомления теперь доходят, заголовок в ntfy отображается читаемым.
+
+### Удалено
+- Нет.
 
 ## 2026-10-31
 

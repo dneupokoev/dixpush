@@ -1,5 +1,5 @@
 # pyproject.toml
-# dv_file_version = '261031.02'
+# dv_file_version = '261031.03'
 
 [build-system]
 requires = ["hatchling"]
@@ -7,7 +7,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "dixpush"
-version = "0.2.0"
+version = "0.2.1"
 description = "Простая асинхронная библиотека push-уведомлений с антиспамом"
 readme = "README.md"
 requires-python = ">=3.10"

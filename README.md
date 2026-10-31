@@ -1,5 +1,5 @@
 <!-- README.md -->
-<!-- dv_file_version = '261031.02' -->
+<!-- dv_file_version = '261031.03' -->
 
 # dixpush
 
@@ -16,7 +16,7 @@ pip install git+https://github.com/dneupokoev/dixpush.git
 Или зафиксируйте версию (рекомендуется для production):
 
 ```bash
-pip install git+https://github.com/dneupokoev/dixpush.git@v0.2.0
+pip install git+https://github.com/dneupokoev/dixpush.git@v0.2.1
 ```
 
 ## Быстрый старт (async)
@@ -171,6 +171,7 @@ DIXPUSH_TIMEOUT_SEC=5
 
 - **Защита от спама по ключу.** Дедупликация, cooldown и rate limit рассчитываются отдельно для каждого `key`. Если `key` не передан, используется `(subj + body)[:200]` в качестве автоматического ключа.
 - **Сообщение = subj + body.** Заголовок отправляется через HTTP-заголовок `Title:` (в клиенте ntfy отображается жирным), тело — как основное содержимое.
+- **Кириллица и эмодзи в заголовке.** HTTP-заголовки должны быть ASCII, поэтому `NtfyTransport` кодирует `Title` по **RFC 2047**, если в нём есть не-ASCII символы. ntfy декодирует его обратно, и вы видите исходный текст (например, `❌ ERROR | prod.itzamna...`), а не `?` или «кракозябры».
 - **Graceful degradation.** При недоступности ntfy логируется warning, код не падает. Ограниченный retry (1 раз), без буферизации в память.
 - **Расширяемость.** Транспорт реализует ABC `Transport`, добавление email/webhook не требует изменения `push.py`.
 - **Async и sync.** `await push.error(...)` для async-кода, `push.error_sync(...)` для синхронного. Синхронный путь не требует `asyncio.run` в проекте.

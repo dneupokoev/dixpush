@@ -1,13 +1,14 @@
 # tests/test_ntfy.py
-# dv_file_version = '261031.01'
+# dv_file_version = '261031.02'
 
 from __future__ import annotations
 
 import httpx
 import pytest
+from email.header import Header, decode_header
 
 from dixpush import Priority
-from dixpush.transports.ntfy import NtfyTransport
+from dixpush.transports.ntfy import NtfyTransport, _encode_title
 
 
 def make_transport(handler, token: str | None = None) -> NtfyTransport:
@@ -137,3 +138,89 @@ async def test_missing_topics_raises() -> None:
         NtfyTransport(server="https://ntfy.sh", topics={})
     with pytest.raises(ValueError):
         NtfyTransport(server="https://ntfy.sh", topics={"error": "x"})
+
+
+# ---------------------------------------------------------------- RFC 2047
+
+def test_encode_title_ascii_unchanged() -> None:
+    """Чистый ASCII не трогаем."""
+    assert _encode_title("Subj") == "Subj"
+    assert _encode_title("ERROR | prod") == "ERROR | prod"
+
+
+def test_encode_title_cyrillic_rfc2047() -> None:
+    """Кириллица → RFC 2047 encoded-word, декодируется обратно."""
+    src = "Ошибка: стартовала"
+    encoded = _encode_title(src)
+    assert encoded != src
+    assert encoded.isascii()  # заголовок стал ASCII
+    # декодируем — должен вернуться исходный текст
+    decoded_parts = decode_header(encoded)
+    decoded = "".join(
+        part.decode(charset or "utf-8") if isinstance(part, bytes) else part
+        for part, charset in decoded_parts
+    )
+    assert decoded == src
+
+
+def test_encode_title_emoji_rfc2047() -> None:
+    """Эмодзи + кириллица → RFC 2047, декодируется обратно."""
+    src = "❌ ERROR | prod.itzamna.ERROR_load_patient_data"
+    encoded = _encode_title(src)
+    assert encoded != src
+    assert encoded.isascii()
+    decoded_parts = decode_header(encoded)
+    decoded = "".join(
+        part.decode(charset or "utf-8") if isinstance(part, bytes) else part
+        for part, charset in decoded_parts
+    )
+    assert decoded == src
+
+
+@pytest.mark.asyncio
+async def test_send_cyrillic_title_does_not_raise() -> None:
+    """Раньше падало с UnicodeEncodeError — теперь нет."""
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["title"] = request.headers.get("Title")
+        return httpx.Response(200)
+
+    t = make_transport(handler)
+    ok = await t.send("error", "Ошибка: тест", "Body", "k", None)
+    await t.close()
+
+    assert ok is True
+    assert captured["title"] is not None
+    assert captured["title"].isascii()  # на провод уходит ASCII
+    # декодируем — исходный текст
+    parts = decode_header(captured["title"])
+    decoded = "".join(
+        p.decode(cs or "utf-8") if isinstance(p, bytes) else p
+        for p, cs in parts
+    )
+    assert decoded == "Ошибка: тест"
+
+
+@pytest.mark.asyncio
+async def test_send_emoji_title_does_not_raise() -> None:
+    """Заголовок с эмодзи (как в логах itzamna) — не падает, доходит читаемым."""
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["title"] = request.headers.get("Title")
+        return httpx.Response(200)
+
+    t = make_transport(handler)
+    title = "❌ ERROR | prod.itzamna.ERROR_load_patient_data"
+    ok = await t.send("error", title, "Body", "k", None)
+    await t.close()
+
+    assert ok is True
+    assert captured["title"].isascii()
+    parts = decode_header(captured["title"])
+    decoded = "".join(
+        p.decode(cs or "utf-8") if isinstance(p, bytes) else p
+        for p, cs in parts
+    )
+    assert decoded == title
